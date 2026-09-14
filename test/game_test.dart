@@ -77,10 +77,21 @@ void main() {
     expect(game.canUndo, isFalse);
   });
   test('question import validates full list and accepts AI code fences', () {
-    expect(
-      Question.parse('```json\n[{"question":"س؟","answer":"ج"}]\n```').length,
-      1,
+    final wrapped = Question.parse(
+      'أكيد، دي الأسئلة:\n'
+      '```json\n'
+      '{"questions":[{"question":"س؟","answer":"ج",},],}\n'
+      '```\n'
+      'أتمنى لكم سهرة سعيدة.',
     );
+    expect(wrapped.single.question, 'س؟');
+    expect(wrapped.single.answer, 'ج');
+    final arabicKeys = Question.parse(
+      '[{"السؤال":"عاصمة مصر؟","الإجابة":"القاهرة"}]',
+    );
+    expect(arabicKeys.single.answer, 'القاهرة');
+    final shortKeys = Question.parse('{“items”:[{“q”:“٢ + ٢؟”,“a”:“٤”}]}');
+    expect(shortKeys.single.question, '٢ + ٢؟');
     expect(
       () => Question.parse('[{"question":"س؟","answer":null}]'),
       throwsFormatException,

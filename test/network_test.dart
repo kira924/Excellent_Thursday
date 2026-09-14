@@ -19,7 +19,7 @@ void main() {
     'real sockets: race, retry, reconnect, elimination, credential isolation',
     () async {
       final game = Game(['أ', 'ب', 'ج']);
-      final server = HostServer(game, onChanged: () {});
+      final server = HostServer(game, onChanged: () {}, discoveryPort: 0);
       await server.start(port: 0);
       addTearDown(server.close);
       PlayerClient make(int team) => PlayerClient(
@@ -79,7 +79,7 @@ void main() {
     'wrong room is rejected; players cannot submit score mutations or stale buzz',
     () async {
       final game = Game(['أ', 'ب']);
-      final server = HostServer(game, onChanged: () {});
+      final server = HostServer(game, onChanged: () {}, discoveryPort: 0);
       await server.start(port: 0);
       addTearDown(server.close);
       final bad = PlayerClient(
@@ -121,4 +121,28 @@ void main() {
       await until(() => game.pending != null);
     },
   );
+
+  test('player discovers the matching host without an address', () async {
+    final game = Game(['أ', 'ب']);
+    final server = HostServer(game, onChanged: () {}, discoveryPort: 0);
+    await server.start(port: 0);
+    addTearDown(server.close);
+    final player = PlayerClient(
+      code: server.code,
+      name: 'مروان',
+      team: 1,
+      onChanged: () {},
+      discoveryPort: server.activeDiscoveryPort,
+      discoveryHost: '127.0.0.1',
+    );
+    addTearDown(player.close);
+
+    await player.connect();
+    await until(() => player.connected);
+
+    expect(player.address, isNull);
+    expect(player.resolvedAddress, '127.0.0.1:${server.port}');
+    expect(game.players.values.single.name, 'مروان');
+    expect(game.players.values.single.team, 1);
+  });
 }

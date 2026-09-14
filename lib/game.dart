@@ -176,32 +176,205 @@ class Question {
   Map<String, String> toJson() => {'question': question, 'answer': answer};
 
   static List<Question> parse(String source) {
-    var text = source.trim();
-    if (text.startsWith('```')) {
-      text = text
-          .replaceFirst(RegExp(r'^```(?:json)?\s*'), '')
-          .replaceFirst(RegExp(r'\s*```$'), '');
+    final text = source.trim().replaceFirst('\ufeff', '');
+    if (text.isEmpty) {
+      throw const FormatException('الصق رد الـAI الأول.');
     }
-    final data = jsonDecode(text);
-    if (data is! List || data.isEmpty || data.length > 500) {
+    FormatException? lastError;
+    for (final candidate in _jsonCandidates(text)) {
+      for (final variant in <String>{
+        candidate,
+        _removeTrailingCommas(candidate),
+        _removeTrailingCommas(
+          candidate.replaceAll('“', '"').replaceAll('”', '"'),
+        ),
+      }) {
+        try {
+          return _questionsFromDecoded(jsonDecode(variant));
+        } on FormatException catch (error) {
+          lastError = error;
+        } catch (_) {
+          lastError = const FormatException(
+            'لقيت JSON، لكن شكل الأسئلة مش مفهوم.',
+          );
+        }
+      }
+    }
+    throw lastError ??
+        const FormatException(
+          'ملقتش قائمة JSON في الرد. انسخ الرد كاملًا وجرب تاني.',
+        );
+  }
+
+  static List<Question> _questionsFromDecoded(dynamic decoded) {
+    dynamic rows = decoded;
+    if (decoded is Map) {
+      rows = _firstValue(decoded, const [
+        'questions',
+        'items',
+        'data',
+        'الأسئلة',
+        'الاسئلة',
+      ]);
+      if (rows == null && _questionText(decoded) != null) rows = [decoded];
+    }
+    if (rows is! List || rows.isEmpty || rows.length > 500) {
       throw const FormatException('محتاجين قائمة من ١ إلى ٥٠٠ سؤال.');
     }
-    return data.map((row) {
-      if (row is! Map ||
-          row['question'] is! String ||
-          row['answer'] is! String) {
-        throw const FormatException(
-          'كل سؤال لازم يحتوي question و answer كنص.',
+    final questions = <Question>[];
+    for (var index = 0; index < rows.length; index++) {
+      final row = rows[index];
+      if (row is! Map) {
+        throw FormatException('السؤال رقم ${index + 1} مش مكتوب كعنصر JSON.');
+      }
+      final question = _questionText(row)?.trim();
+      final answer = _answerText(row)?.trim();
+      if (question == null || answer == null) {
+        throw FormatException(
+          'السؤال رقم ${index + 1} لازم يحتوي سؤال وإجابة.',
         );
       }
-      final q = (row['question'] as String).trim();
-      final a = (row['answer'] as String).trim();
-      if (q.isEmpty || a.isEmpty || q.length > 2000 || a.length > 2000) {
-        throw const FormatException(
-          'السؤال والإجابة لازم يكونوا من ١ إلى ٢٠٠٠ حرف.',
+      if (question.isEmpty ||
+          answer.isEmpty ||
+          question.length > 2000 ||
+          answer.length > 2000) {
+        throw FormatException(
+          'السؤال رقم ${index + 1} أو إجابته فاضي أو طويل جدًا.',
         );
       }
-      return Question(q, a);
-    }).toList();
+      questions.add(Question(question, answer));
+    }
+    return questions;
+  }
+
+  static String? _questionText(Map row) => _firstString(row, const [
+    'question',
+    'q',
+    'prompt',
+    'text',
+    'السؤال',
+    'سؤال',
+  ]);
+
+  static String? _answerText(Map row) => _firstString(row, const [
+    'answer',
+    'a',
+    'answertext',
+    'الإجابة',
+    'الاجابة',
+    'إجابة',
+    'اجابة',
+    'الجواب',
+  ]);
+
+  static String? _firstString(Map row, List<String> acceptedKeys) {
+    final value = _firstValue(row, acceptedKeys);
+    return value is String ? value : null;
+  }
+
+  static dynamic _firstValue(Map row, List<String> acceptedKeys) {
+    for (final entry in row.entries) {
+      final key = entry.key.toString().trim().toLowerCase();
+      if (acceptedKeys.contains(key)) return entry.value;
+    }
+    return null;
+  }
+
+  static Iterable<String> _jsonCandidates(String source) sync* {
+    final seen = <String>{};
+    final fences = RegExp(
+      r'```(?:json)?\s*(.*?)```',
+      caseSensitive: false,
+      multiLine: true,
+      dotAll: true,
+    );
+    for (final match in fences.allMatches(source)) {
+      final candidate = match.group(1)?.trim();
+      if (candidate != null && candidate.isNotEmpty && seen.add(candidate)) {
+        yield candidate;
+      }
+    }
+    if (seen.add(source)) yield source;
+
+    int? start;
+    final stack = <String>[];
+    var inString = false;
+    var escaped = false;
+    for (var index = 0; index < source.length; index++) {
+      final character = source[index];
+      if (start == null) {
+        if (character == '[' || character == '{') {
+          start = index;
+          stack.add(character);
+        }
+        continue;
+      }
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character == '\\') {
+          escaped = true;
+        } else if (character == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (character == '"') {
+        inString = true;
+      } else if (character == '[' || character == '{') {
+        stack.add(character);
+      } else if (character == ']' || character == '}') {
+        final expected = character == ']' ? '[' : '{';
+        if (stack.isEmpty || stack.last != expected) {
+          start = null;
+          stack.clear();
+          continue;
+        }
+        stack.removeLast();
+        if (stack.isEmpty) {
+          final candidate = source.substring(start, index + 1).trim();
+          if (seen.add(candidate)) yield candidate;
+          start = null;
+        }
+      }
+    }
+  }
+
+  static String _removeTrailingCommas(String source) {
+    final output = StringBuffer();
+    var inString = false;
+    var escaped = false;
+    for (var index = 0; index < source.length; index++) {
+      final character = source[index];
+      if (inString) {
+        output.write(character);
+        if (escaped) {
+          escaped = false;
+        } else if (character == '\\') {
+          escaped = true;
+        } else if (character == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (character == '"') {
+        inString = true;
+        output.write(character);
+        continue;
+      }
+      if (character == ',') {
+        var lookAhead = index + 1;
+        while (lookAhead < source.length &&
+            RegExp(r'\s').hasMatch(source[lookAhead])) {
+          lookAhead++;
+        }
+        if (lookAhead < source.length &&
+            (source[lookAhead] == ']' || source[lookAhead] == '}')) {
+          continue;
+        }
+      }
+      output.write(character);
+    }
+    return output.toString();
   }
 }

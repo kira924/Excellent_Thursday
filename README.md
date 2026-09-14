@@ -13,24 +13,24 @@ The first release targets Android. The iOS project is included, but it still nee
 - Allow the same player or team to try again whenever the host reopens the buzzer.
 - End the round when a team reaches **+5**; eliminate a team at **−5**. If only one team remains, it wins.
 - Undo the last scored answer, save game scores locally, and reconnect players after a brief network interruption.
-- Import host-only questions and answers as JSON generated before the game with an AI chat tool.
+- Import host-only questions and answers from a complete AI reply, including JSON in a code block or explanatory text.
 
 ## Play a round
 
 1. Install the same APK on the host's Android phone and every player's Android phone.
 2. Connect every phone to the same Wi-Fi network. Internet access is not required.
 3. On the host phone, choose **I am the host**, set the team count and names, then open the session.
-4. Give players the displayed host address, six-digit session code, and their team number.
-5. Players choose **Join to play**, enter their details, and wait for the host to open the buzzer.
+4. Give players the six-digit session code and their team number.
+5. Players choose **Join to play** and enter their name, code, and team. The app finds the host automatically on the local network.
 6. The host reads a question, opens the buzzer, judges the first answer, and repeats until the round ends.
 
 Keep the host app in the foreground while playing. Moving it to the background closes an open buzzer to avoid accepting a delayed response.
 
-If a player cannot join, verify the address and session code, turn off any VPN, and avoid guest Wi-Fi or router settings that isolate devices from one another.
+If a player cannot join, verify the session code, turn off any VPN, and avoid guest Wi-Fi or router settings that isolate devices from one another.
 
 ## Questions
 
-The app works in buzzer-only mode. To add questions, use **Add questions** on the host screen, ask an AI chat tool for a JSON list, review the answers, then paste the result into the app. Questions and answers remain on the host device and are not sent to players.
+The app works in buzzer-only mode. To add questions, use **Add questions** on the host screen, copy the prepared prompt to an AI chat tool, review the answers, then paste the complete reply into the app. The importer accepts a plain JSON array, a `questions`/`items` wrapper, Markdown code fences, trailing commas, smart quotes, and Arabic question/answer keys. Questions and answers remain on the host device and are not sent to players.
 
 ```json
 [
@@ -56,7 +56,9 @@ The debug APK is for testing on Android 7+ ARM64 devices. Store distribution req
 
 ## Verification
 
-The game rules, WebSocket host/client behavior, reconnection, score handling, and mobile-sized Arabic UI are covered by automated tests. The latest local verification passed all nine tests and static analysis without findings. A real Wi-Fi test with two or more physical phones is still required before relying on it for a game night.
+The game rules, UDP host discovery, WebSocket host/client behavior, reconnection, score handling, question import, and mobile-sized Arabic UI are covered by automated tests. A real Wi-Fi test with two or more physical phones is still required before relying on it for a game night.
+
+Verified on September 14, 2026: all 11 tests passed, static analysis reported no issues, and the signed debug APK was built as version 0.2.0.
 
 ## Contributing
 

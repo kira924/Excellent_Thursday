@@ -375,14 +375,11 @@ class JoinScreen extends StatefulWidget {
 }
 
 class _JoinScreenState extends State<JoinScreen> {
-  final name = TextEditingController(),
-      address = TextEditingController(),
-      code = TextEditingController();
+  final name = TextEditingController(), code = TextEditingController();
   int team = 0;
   @override
   void dispose() {
     name.dispose();
-    address.dispose();
     code.dispose();
     super.dispose();
   }
@@ -393,23 +390,12 @@ class _JoinScreenState extends State<JoinScreen> {
     body: PageBody(
       children: [
         title('جهّز صباعك.', 32),
-        hint('اتصل بنفس واي فاي الهوست، وخد منه العنوان والكود ورقم فريقك.'),
+        hint('اتصل بنفس واي فاي الهوست، وخد منه الكود ورقم فريقك.'),
         gap(24),
         TextField(
           controller: name,
           maxLength: 24,
           decoration: const InputDecoration(labelText: 'اسمك', counterText: ''),
-        ),
-        gap(),
-        TextField(
-          controller: address,
-          textDirection: TextDirection.ltr,
-          keyboardType: TextInputType.url,
-          autocorrect: false,
-          decoration: const InputDecoration(
-            labelText: 'عنوان الهوست',
-            hintText: '192.168.1.5:45873',
-          ),
         ),
         gap(),
         TextField(
@@ -442,17 +428,10 @@ class _JoinScreenState extends State<JoinScreen> {
               notice(context, 'اكتب اسمك وكود الجلسة المكوّن من ٦ أرقام.');
               return;
             }
-            try {
-              PlayerClient.endpoint(latin(address.text));
-            } catch (_) {
-              notice(context, 'راجع عنوان الهوست، زي 192.168.1.5:45873');
-              return;
-            }
             Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (_) => PlayerScreen(
-                  address: latin(address.text),
                   code: latin(code.text),
                   name: name.text.trim(),
                   team: team,
@@ -733,30 +712,22 @@ class _HostScreenState extends State<HostScreen> with WidgetsBindingObserver {
                           ),
                         ),
                         IconButton(
-                          tooltip: 'نسخ بيانات الدخول',
+                          tooltip: 'نسخ كود الجلسة',
                           onPressed: () {
                             unawaited(
                               Clipboard.setData(
-                                ClipboardData(
-                                  text:
-                                      'العنوان: ${server.addresses.join(' / ')}\nالكود: ${server.code}',
-                                ),
+                                ClipboardData(text: server.code),
                               ),
                             );
-                            notice(context, 'اتنسخت بيانات الدخول.');
+                            notice(context, 'اتنسخ كود الجلسة.');
                           },
                           icon: const Icon(Icons.copy_rounded),
                         ),
                       ],
                     ),
-                    for (final address in server.addresses)
-                      SelectableText(
-                        address,
-                        textDirection: TextDirection.ltr,
-                        style: const TextStyle(color: muted),
-                      ),
-                    if (server.addresses.isEmpty)
-                      hint('وصّل الموبايل بالواي فاي، وبعدها افتح جلسة جديدة.'),
+                    hint(
+                      'اللاعب يكتب الكود فقط، والتطبيق هيلاقي الهوست تلقائيًا.',
+                    ),
                   ],
                 ),
               ),
@@ -1051,7 +1022,7 @@ class _QuestionImportDialogState extends State<QuestionImportDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             hint(
-              'انسخ الطلب لأي شات AI قبل اللعب. راجع الإجابات، والصق القائمة هنا. القائمة الجديدة بتحل محل القديمة.',
+              'انسخ الطلب لأي شات AI قبل اللعب. راجع الإجابات، والصق الرد كاملًا هنا حتى لو فيه شرح أو JSON داخل code block.',
             ),
             TextButton.icon(
               onPressed: () {
@@ -1068,7 +1039,7 @@ class _QuestionImportDialogState extends State<QuestionImportDialog> {
               maxLines: 12,
               maxLength: 200000,
               decoration: InputDecoration(
-                labelText: 'الصق قائمة الأسئلة',
+                labelText: 'الصق رد الـAI كاملًا',
                 counterText: '',
                 errorText: error,
               ),
@@ -1090,10 +1061,12 @@ class _QuestionImportDialogState extends State<QuestionImportDialog> {
         onPressed: () {
           try {
             Navigator.pop(context, Question.parse(source.text));
+          } on FormatException catch (exception) {
+            setState(() => error = exception.message.toString());
           } catch (_) {
             setState(
-              () => error =
-                  'راجع التنسيق: قائمة فيها question و answer لكل سؤال.',
+              () =>
+                  error = 'حصلت مشكلة أثناء قراءة الأسئلة. جرّب نسخ الرد تاني.',
             );
           }
         },
@@ -1106,12 +1079,13 @@ class _QuestionImportDialogState extends State<QuestionImportDialog> {
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({
     super.key,
-    required this.address,
+    this.address,
     required this.code,
     required this.name,
     required this.team,
   });
-  final String address, code, name;
+  final String? address;
+  final String code, name;
   final int team;
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();

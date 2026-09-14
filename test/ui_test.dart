@@ -10,6 +10,31 @@ import 'package:excellent_thursday/network.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('player joins with code only and no host address field', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+
+    await tester.pumpWidget(ThursdayApp(prefs: prefs));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('داخل ألعب'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('كود الجلسة'), findsOneWidget);
+    expect(find.text('عنوان الهوست'), findsNothing);
+    expect(find.byType(TextField), findsNWidgets(2));
+    expect(
+      find.text('اتصل بنفس واي فاي الهوست، وخد منه الكود ورقم فريقك.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('Arabic mobile layout and host setup for eight teams', (
     tester,
   ) async {

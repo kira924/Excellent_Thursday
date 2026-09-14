@@ -13,16 +13,19 @@ String _token() {
 }
 
 class HostServer {
-  HostServer(this.game, {required this.onChanged});
+  HostServer(this.game, {required this.onChanged, this.discoveryPort = 45874});
   final Game game;
   final void Function() onChanged;
+  final int discoveryPort;
   final String code = (100000 + Random.secure().nextInt(900000)).toString();
   HttpServer? _server;
+  RawDatagramSocket? _discovery;
   final Map<String, WebSocket> _clients = {};
   final Set<WebSocket> _sockets = {};
   final Map<String, String> _credentials = {};
   List<String> addresses = [];
   int get port => _server?.port ?? 0;
+  int get activeDiscoveryPort => _discovery?.port ?? discoveryPort;
   bool _closed = false;
 
   Future<void> start({int port = 45873}) async {
@@ -32,7 +35,48 @@ class HostServer {
         .where((a) => !a.isLoopback)
         .map((a) => '${a.address}:${_server!.port}')
         .toList();
+    try {
+      _discovery = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        discoveryPort,
+        reuseAddress: false,
+      );
+      _discovery!.listen(_discoveryEvent, onError: (_) {});
+    } catch (_) {
+      await _server?.close(force: true);
+      _server = null;
+      rethrow;
+    }
     _server!.listen(_request, onError: (_) {});
+  }
+
+  void _discoveryEvent(RawSocketEvent event) {
+    if (_closed || event != RawSocketEvent.read) return;
+    Datagram? datagram;
+    while ((datagram = _discovery?.receive()) != null) {
+      final packet = datagram!;
+      if (packet.data.length > 512) continue;
+      try {
+        final request = jsonDecode(
+          utf8.decode(packet.data, allowMalformed: false),
+        );
+        if (request is! Map ||
+            request['type'] != 'excellent_thursday_discover_v1' ||
+            request['code'] != code) {
+          continue;
+        }
+        final response = utf8.encode(
+          jsonEncode({
+            'type': 'excellent_thursday_host_v1',
+            'code': code,
+            'port': port,
+          }),
+        );
+        _discovery?.send(response, packet.address, packet.port);
+      } catch (_) {
+        // Ignore unrelated broadcast traffic on the local network.
+      }
+    }
   }
 
   Future<void> _request(HttpRequest request) async {
@@ -157,6 +201,7 @@ class HostServer {
 
   Future<void> close() async {
     _closed = true;
+    _discovery?.close();
     await _server?.close(force: true);
     await Future.wait(_sockets.toList().map((s) => s.close()));
     _clients.clear();
@@ -166,17 +211,25 @@ class HostServer {
 
 class PlayerClient {
   PlayerClient({
-    required this.address,
+    this.address,
     required this.code,
     required this.name,
     required this.team,
     required this.onChanged,
+    this.discoveryPort = 45874,
+    this.discoveryHost = '255.255.255.255',
   });
-  final String address, code, name;
+  final String? address;
+  final String code, name;
   final int team;
+  final int discoveryPort;
+  final String discoveryHost;
   final void Function() onChanged;
   WebSocket? _socket;
+  RawDatagramSocket? _finder;
   Timer? _retry;
+  Timer? _discoveryTimer;
+  String? resolvedAddress;
   String? token;
   String? id;
   Map<String, dynamic>? state;
@@ -206,11 +259,19 @@ class PlayerClient {
     _connecting = true;
     WebSocket? socket;
     try {
+      status = address?.trim().isNotEmpty == true
+          ? 'بنوصل بالهوست…'
+          : 'بندور على الهوست في الشبكة…';
+      onChanged();
+      final target = address?.trim().isNotEmpty == true
+          ? endpoint(address!)
+          : await _discoverHost();
+      resolvedAddress = '${target.host}:${target.port}';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 5);
       try {
         socket = await WebSocket.connect(
-          endpoint(address).toString(),
+          target.toString(),
           customClient: client,
         ).timeout(const Duration(seconds: 7));
       } catch (_) {
@@ -260,12 +321,84 @@ class PlayerClient {
       );
     } catch (_) {
       if (!_closed) {
-        status = 'مش واصلين للهوست. بنتأكد من الاتصال ونحاول تاني…';
+        status = 'مش لاقيين الجلسة. راجع الكود والشبكة، وبنحاول تاني…';
         onChanged();
         _scheduleRetry();
       }
     } finally {
       _connecting = false;
+    }
+  }
+
+  Future<Uri> _discoverHost() async {
+    final finder = await RawDatagramSocket.bind(
+      InternetAddress.anyIPv4,
+      0,
+      reuseAddress: false,
+    );
+    _finder = finder;
+    finder.broadcastEnabled = true;
+    final completer = Completer<Uri>();
+    late final StreamSubscription<RawSocketEvent> subscription;
+    subscription = finder.listen((event) {
+      if (event != RawSocketEvent.read || completer.isCompleted) return;
+      Datagram? datagram;
+      while ((datagram = finder.receive()) != null) {
+        final packet = datagram!;
+        if (packet.data.length > 512) continue;
+        try {
+          final response = jsonDecode(
+            utf8.decode(packet.data, allowMalformed: false),
+          );
+          final port = response is Map ? response['port'] : null;
+          if (response is! Map ||
+              response['type'] != 'excellent_thursday_host_v1' ||
+              response['code'] != code ||
+              port is! int ||
+              port < 1 ||
+              port > 65535) {
+            continue;
+          }
+          completer.complete(
+            Uri(
+              scheme: 'ws',
+              host: packet.address.address,
+              port: port,
+              path: '/play',
+            ),
+          );
+          return;
+        } catch (_) {
+          // Ignore unrelated UDP packets and keep searching.
+        }
+      }
+    }, onError: (_) {});
+
+    final request = utf8.encode(
+      jsonEncode({'type': 'excellent_thursday_discover_v1', 'code': code}),
+    );
+    void sendRequest() {
+      if (_closed || completer.isCompleted) return;
+      try {
+        finder.send(request, InternetAddress(discoveryHost), discoveryPort);
+      } catch (_) {
+        // A retry will run if the network interface is still starting.
+      }
+    }
+
+    _discoveryTimer = Timer.periodic(
+      const Duration(milliseconds: 700),
+      (_) => sendRequest(),
+    );
+    sendRequest();
+    try {
+      return await completer.future.timeout(const Duration(seconds: 5));
+    } finally {
+      _discoveryTimer?.cancel();
+      _discoveryTimer = null;
+      await subscription.cancel();
+      finder.close();
+      if (identical(_finder, finder)) _finder = null;
     }
   }
 
@@ -310,6 +443,8 @@ class PlayerClient {
   Future<void> close() async {
     _closed = true;
     _retry?.cancel();
+    _discoveryTimer?.cancel();
+    _finder?.close();
     await _socket?.close();
     connected = false;
   }
