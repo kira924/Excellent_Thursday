@@ -188,7 +188,7 @@ class HomeScreen extends StatelessWidget {
         gap(20),
         title('الخميس\nالممتاز', 48),
         gap(8),
-        hint('اللمة عليكم، والجرس علينا.\nكوّنوا الفرق… وأسرع إجابة تكسب.'),
+        hint('\nكوّنوا الفرق… وأسرع إجابة تكسب.'),
         gap(30),
         FilledButton.icon(
           onPressed: () => Navigator.push(
