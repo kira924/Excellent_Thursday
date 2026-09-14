@@ -122,16 +122,21 @@ void main() {
     },
   );
 
-  test('player discovers the matching host without an address', () async {
+  test('player discovers host and reconnects after host resumes', () async {
     final game = Game(['أ', 'ب']);
     final server = HostServer(game, onChanged: () {}, discoveryPort: 0);
     await server.start(port: 0);
     addTearDown(server.close);
-    final player = PlayerClient(
+    var joined = false;
+    var disconnectedAfterJoin = false;
+    late final PlayerClient player;
+    player = PlayerClient(
       code: server.code,
       name: 'مروان',
       team: 1,
-      onChanged: () {},
+      onChanged: () {
+        if (joined && !player.connected) disconnectedAfterJoin = true;
+      },
       discoveryPort: server.activeDiscoveryPort,
       discoveryHost: '127.0.0.1',
     );
@@ -139,10 +144,20 @@ void main() {
 
     await player.connect();
     await until(() => player.connected);
+    joined = true;
 
     expect(player.address, isNull);
     expect(player.resolvedAddress, '127.0.0.1:${server.port}');
     expect(game.players.values.single.name, 'مروان');
     expect(game.players.values.single.team, 1);
+
+    final originalId = player.id;
+    server.refreshConnections();
+    await until(() => disconnectedAfterJoin);
+    await until(() => player.connected);
+
+    expect(player.id, originalId);
+    expect(game.players.length, 1);
+    expect(game.players.values.single.online, isTrue);
   });
 }

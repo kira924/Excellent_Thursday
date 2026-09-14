@@ -95,7 +95,7 @@ class HostServer {
         return;
       }
       _sockets.add(socket);
-      socket.pingInterval = const Duration(seconds: 3);
+      socket.pingInterval = const Duration(seconds: 15);
       String? playerId;
       final deadline = Timer(const Duration(seconds: 8), () {
         if (playerId == null) unawaited(socket.close());
@@ -194,9 +194,29 @@ class HostServer {
     if (_closed) return;
     final message = jsonEncode({'type': 'state', 'state': game.publicState()});
     for (final socket in _clients.values.toList()) {
-      if (socket.readyState == WebSocket.open) socket.add(message);
+      if (socket.readyState != WebSocket.open) continue;
+      try {
+        socket.add(message);
+      } catch (_) {
+        unawaited(socket.close());
+      }
     }
     onChanged();
+  }
+
+  void refreshConnections() {
+    if (_closed) return;
+    final staleSockets = _sockets.toList();
+    _clients.clear();
+    for (final player in game.players.values) {
+      player.online = false;
+    }
+    for (final socket in staleSockets) {
+      if (socket.readyState == WebSocket.open) {
+        unawaited(socket.close(WebSocketStatus.goingAway, 'Host resumed'));
+      }
+    }
+    publish();
   }
 
   Future<void> close() async {
@@ -259,31 +279,38 @@ class PlayerClient {
     _connecting = true;
     WebSocket? socket;
     try {
-      status = address?.trim().isNotEmpty == true
-          ? 'بنوصل بالهوست…'
-          : 'بندور على الهوست في الشبكة…';
+      status = resolvedAddress == null && address?.trim().isNotEmpty != true
+          ? 'بندور على الهوست في الشبكة…'
+          : 'بنوصل بالهوست…';
       onChanged();
-      final target = address?.trim().isNotEmpty == true
-          ? endpoint(address!)
-          : await _discoverHost();
-      resolvedAddress = '${target.host}:${target.port}';
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 5);
-      try {
-        socket = await WebSocket.connect(
-          target.toString(),
-          customClient: client,
-        ).timeout(const Duration(seconds: 7));
-      } catch (_) {
-        client.close(force: true);
-        rethrow;
+      final manualAddress = address?.trim();
+      if (manualAddress?.isNotEmpty == true) {
+        final target = endpoint(manualAddress!);
+        socket = await _openSocket(target);
+        resolvedAddress = '${target.host}:${target.port}';
+      } else if (resolvedAddress != null) {
+        final cachedTarget = endpoint(resolvedAddress!);
+        try {
+          socket = await _openSocket(cachedTarget);
+        } catch (_) {
+          resolvedAddress = null;
+          status = 'بندور على الهوست في الشبكة…';
+          onChanged();
+          final discoveredTarget = await _discoverHost();
+          socket = await _openSocket(discoveredTarget);
+          resolvedAddress = '${discoveredTarget.host}:${discoveredTarget.port}';
+        }
+      } else {
+        final discoveredTarget = await _discoverHost();
+        socket = await _openSocket(discoveredTarget);
+        resolvedAddress = '${discoveredTarget.host}:${discoveredTarget.port}';
       }
       if (_closed) {
         await socket.close();
         return;
       }
       _socket = socket;
-      socket.pingInterval = const Duration(seconds: 3);
+      socket.pingInterval = const Duration(seconds: 15);
       socket.add(
         jsonEncode({
           'type': 'join',
@@ -327,6 +354,19 @@ class PlayerClient {
       }
     } finally {
       _connecting = false;
+    }
+  }
+
+  Future<WebSocket> _openSocket(Uri target) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    try {
+      return await WebSocket.connect(
+        target.toString(),
+        customClient: client,
+      ).timeout(const Duration(seconds: 5));
+    } catch (_) {
+      client.close(force: true);
+      rethrow;
     }
   }
 
@@ -417,7 +457,7 @@ class PlayerClient {
   void _scheduleRetry() {
     _retry?.cancel();
     if (!_closed && !rejected) {
-      _retry = Timer(const Duration(seconds: 2), connect);
+      _retry = Timer(const Duration(milliseconds: 750), connect);
     }
   }
 

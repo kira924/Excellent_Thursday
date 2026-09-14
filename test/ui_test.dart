@@ -8,6 +8,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:excellent_thursday/main.dart';
 import 'package:excellent_thursday/network.dart';
 
+Future<void> waitUntil(bool Function() condition) async {
+  final limit = DateTime.now().add(const Duration(seconds: 8));
+  while (!condition()) {
+    if (DateTime.now().isAfter(limit)) {
+      fail('Timed out waiting for UI network state');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 15));
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -140,12 +150,17 @@ void main() {
         .widgetList<Text>(find.byType(Text))
         .map((w) => w.data ?? '')
         .firstWhere((s) => RegExp(r'^\d{6}$').hasMatch(s));
-    final player = PlayerClient(
+    var joined = false;
+    var disconnectedAfterResume = false;
+    late final PlayerClient player;
+    player = PlayerClient(
       address: '127.0.0.1:45873',
       code: roomCode,
       name: 'علي',
       team: 7,
-      onChanged: () {},
+      onChanged: () {
+        if (joined && !player.connected) disconnectedAfterResume = true;
+      },
     );
     addTearDown(player.close);
     await tester.runAsync(() async {
@@ -154,6 +169,18 @@ void main() {
     });
     await tester.pumpAndSettle();
     expect(player.connected, isTrue);
+    joined = true;
+    final originalPlayerId = player.id;
+    tester.binding.handleAppLifecycleStateChanged(
+      AppLifecycleState.paused,
+    );
+    tester.binding.handleAppLifecycleStateChanged(
+      AppLifecycleState.resumed,
+    );
+    await tester.runAsync(() => waitUntil(() => disconnectedAfterResume));
+    await tester.runAsync(() => waitUntil(() => player.connected));
+    expect(player.id, originalPlayerId);
+
     await tester.tap(find.text('افتح الجرس للجميع'));
     await tester.runAsync(() async {
       await Future<void>.delayed(const Duration(milliseconds: 100));

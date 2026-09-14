@@ -1,1 +1,1 @@
-994e02d39b7061ebd32dc5650c1debf06e0daa79e7401a15dff1b87a11d4febc  excellent-thursday-0.2.0-arm64.apk
+c7bd157c8640e6bc567844db821b14e26feac6e1609c62bd49af9b8a56a42e58  excellent-thursday-0.3.0-arm64.apk

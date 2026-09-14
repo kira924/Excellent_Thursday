@@ -12,7 +12,7 @@ The first release targets Android. The iOS project is included, but it still nee
 - Award **+1** for a correct answer and **−1** for an incorrect answer.
 - Allow the same player or team to try again whenever the host reopens the buzzer.
 - End the round when a team reaches **+5**; eliminate a team at **−5**. If only one team remains, it wins.
-- Undo the last scored answer, save game scores locally, and reconnect players after a brief network interruption.
+- Undo the last scored answer, save game scores locally, and reconnect players with the same identity after a network interruption or after the host returns from another app.
 - Import host-only questions and answers from a complete AI reply, including JSON in a code block or explanatory text.
 
 ## Play a round
@@ -24,7 +24,7 @@ The first release targets Android. The iOS project is included, but it still nee
 5. Players choose **Join to play** and enter their name, code, and team. The app finds the host automatically on the local network.
 6. The host reads a question, opens the buzzer, judges the first answer, and repeats until the round ends.
 
-Keep the host app in the foreground while playing. Moving it to the background closes an open buzzer to avoid accepting a delayed response.
+Moving the host app to the background closes an open buzzer to avoid accepting a delayed response. When the host returns, stale sockets are refreshed and players reconnect automatically with the same session code, identity, and team.
 
 If a player cannot join, verify the session code, turn off any VPN, and avoid guest Wi-Fi or router settings that isolate devices from one another.
 
@@ -58,8 +58,7 @@ The debug APK is for testing on Android 7+ ARM64 devices. Store distribution req
 
 The game rules, UDP host discovery, WebSocket host/client behavior, reconnection, score handling, question import, and mobile-sized Arabic UI are covered by automated tests. A real Wi-Fi test with two or more physical phones is still required before relying on it for a game night.
 
-Verified on September 14, 2026: all 11 tests passed, static analysis reported no issues, and the signed debug APK was built as version 0.2.0.
-
+Verified on September 14, 2026: all 11 tests passed, including a host pause/resume lifecycle test, static analysis reported no issues, and the signed debug APK was built as version 0.3.0.
 ## Contributing
 
 This repository is maintained by **Khaled Abdulrahman**. Changes to the default branch are made only by the repository owner's GitHub account. See [CONTRIBUTING.md](CONTRIBUTING.md).

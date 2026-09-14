@@ -602,6 +602,9 @@ class _HostScreenState extends State<HostScreen> with WidgetsBindingObserver {
       game.closeBell();
       server.publish();
     }
+    if (state == AppLifecycleState.resumed && ready) {
+      server.refreshConnections();
+    }
   }
 
   @override
