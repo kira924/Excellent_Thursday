@@ -1,0 +1,65 @@
+# Excellent Thursday | الخميس الممتاز
+
+An offline-friendly team buzzer app for the weekly *Excellent Thursday* game night. One phone hosts a local session over the same Wi-Fi network; every other phone joins as a player and gets a large, responsive buzzer.
+
+The first release targets Android. The iOS project is included, but it still needs to be built and tested on macOS with Xcode.
+
+## What it does
+
+- Create a game with 2 to 8 custom-named teams.
+- Let players join the host from the same local Wi-Fi network.
+- Accept the first buzzer event received by the host and lock the other buzzers.
+- Award **+1** for a correct answer and **−1** for an incorrect answer.
+- Allow the same player or team to try again whenever the host reopens the buzzer.
+- End the round when a team reaches **+5**; eliminate a team at **−5**. If only one team remains, it wins.
+- Undo the last scored answer, save game scores locally, and reconnect players after a brief network interruption.
+- Import host-only questions and answers as JSON generated before the game with an AI chat tool.
+
+## Play a round
+
+1. Install the same APK on the host's Android phone and every player's Android phone.
+2. Connect every phone to the same Wi-Fi network. Internet access is not required.
+3. On the host phone, choose **I am the host**, set the team count and names, then open the session.
+4. Give players the displayed host address, six-digit session code, and their team number.
+5. Players choose **Join to play**, enter their details, and wait for the host to open the buzzer.
+6. The host reads a question, opens the buzzer, judges the first answer, and repeats until the round ends.
+
+Keep the host app in the foreground while playing. Moving it to the background closes an open buzzer to avoid accepting a delayed response.
+
+If a player cannot join, verify the address and session code, turn off any VPN, and avoid guest Wi-Fi or router settings that isolate devices from one another.
+
+## Questions
+
+The app works in buzzer-only mode. To add questions, use **Add questions** on the host screen, ask an AI chat tool for a JSON list, review the answers, then paste the result into the app. Questions and answers remain on the host device and are not sent to players.
+
+```json
+[
+  {"question": "How many days are in a week?", "answer": "7"},
+  {"question": "What is 9 multiplied by 8?", "answer": "72"}
+]
+```
+
+See [examples/questions.json](examples/questions.json) for a ready-to-import Arabic example.
+
+## Development
+
+The project uses Flutter 3.41.7, Dart 3.11.5, Java 17, and Android SDK 36.
+
+```powershell
+flutter pub get
+dart analyze lib test
+flutter test --reporter expanded
+flutter build apk --debug --target-platform android-arm64
+```
+
+The debug APK is for testing on Android 7+ ARM64 devices. Store distribution requires a separate release signing setup.
+
+## Verification
+
+The game rules, WebSocket host/client behavior, reconnection, score handling, and mobile-sized Arabic UI are covered by automated tests. The latest local verification passed all nine tests and static analysis without findings. A real Wi-Fi test with two or more physical phones is still required before relying on it for a game night.
+
+## Contributing
+
+This repository is maintained by **Khaled Abdulrahman**. Changes to the default branch are made only by the repository owner's GitHub account. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Noto Sans Arabic is included under the [SIL Open Font License](assets/fonts/OFL.txt).
