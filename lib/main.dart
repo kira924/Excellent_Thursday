@@ -531,6 +531,8 @@ class _HostScreenState extends State<HostScreen> with WidgetsBindingObserver {
   bool ready = false, reveal = false, leaving = false;
   String? error;
   String? lastPending;
+  Timer? recoveryRetry;
+  bool backgrounded = false;
   List<Question> questions = [];
   int questionIndex = 0;
   Future<void> saveQueue = Future.value();
@@ -552,17 +554,36 @@ class _HostScreenState extends State<HostScreen> with WidgetsBindingObserver {
     start();
   }
 
-  Future<void> start() async {
+  Future<void> start({bool recovering = false}) async {
+    recoveryRetry?.cancel();
     try {
-      await server.start();
+      if (recovering) {
+        await server.resume();
+      } else {
+        await server.start();
+      }
       if (!mounted) {
         await server.close();
         return;
       }
-      setState(() => ready = true);
+      if (backgrounded || leaving) return;
+      setState(() {
+        ready = server.isListening;
+        error = null;
+      });
       changed();
     } catch (_) {
-      if (mounted) {
+      if (mounted && !backgrounded && !leaving) {
+        if (recovering) {
+          setState(() {
+            ready = false;
+            error = 'بنرجّع اتصال الجلسة… الكود والنقاط محفوظين.';
+          });
+          recoveryRetry = Timer(const Duration(seconds: 2), () {
+            unawaited(start(recovering: true));
+          });
+          return;
+        }
         setState(
           () => error =
               'مش قادرين نفتح الجلسة. اتأكد من الواي فاي وصلاحية الشبكة المحلية، وارجع جرّب تاني.',
@@ -598,17 +619,21 @@ class _HostScreenState extends State<HostScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused && game.armed) {
-      game.closeBell();
-      server.publish();
-    }
-    if (state == AppLifecycleState.resumed && ready) {
-      server.refreshConnections();
+    if (leaving) return;
+    if (state == AppLifecycleState.paused) {
+      backgrounded = true;
+      recoveryRetry?.cancel();
+      ready = false;
+      unawaited(server.suspend());
+    } else if (state == AppLifecycleState.resumed && backgrounded) {
+      backgrounded = false;
+      unawaited(start(recovering: true));
     }
   }
 
   @override
   void dispose() {
+    recoveryRetry?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     unawaited(server.close());
     super.dispose();
@@ -623,6 +648,7 @@ class _HostScreenState extends State<HostScreen> with WidgetsBindingObserver {
       return;
     }
     if (!mounted) return;
+    recoveryRetry?.cancel();
     setState(() => leaving = true);
     await server.close();
     if (mounted) Navigator.pop(context);

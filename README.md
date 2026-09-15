@@ -24,9 +24,13 @@ The first release targets Android. The iOS project is included, but it still nee
 5. Players choose **Join to play** and enter their name, code, and team. The app finds the host automatically on the local network.
 6. The host reads a question, opens the buzzer, judges the first answer, and repeats until the round ends.
 
-Moving the host app to the background closes an open buzzer to avoid accepting a delayed response. When the host returns, stale sockets are refreshed and players reconnect automatically with the same session code, identity, and team.
+Moving the host app to the background closes an open buzzer and pauses its network listeners. Returning to the app rebinds both the WebSocket and discovery ports, preserving the session code, players, teams, questions, and scores. Failed rebinds retry automatically. Players keep the last known host address across failed attempts and try discovery as a fallback.
+
+This recovery covers switching apps while the host process is alive. Force-stopping the host or the operating system killing its process still requires restoring the saved game and joining a new session.
 
 If a player cannot join, verify the session code, turn off any VPN, and avoid guest Wi-Fi or router settings that isolate devices from one another.
+
+For a device check, install 0.4.0 on every phone, score an answer, switch the host to another app for at least 30 seconds, then return. Leave players on their buzzer screens. Verify the same code, scores, and players remain, then open the buzzer and score another answer. Repeat once with the host screen locked.
 
 ## Questions
 
@@ -58,7 +62,8 @@ The debug APK is for testing on Android 7+ ARM64 devices. Store distribution req
 
 The game rules, UDP host discovery, WebSocket host/client behavior, reconnection, score handling, question import, and mobile-sized Arabic UI are covered by automated tests. A real Wi-Fi test with two or more physical phones is still required before relying on it for a game night.
 
-Verified on September 14, 2026: all 11 tests passed, including a host pause/resume lifecycle test, static analysis reported no issues, and the signed debug APK was built as version 0.3.0.
+Version 0.4.0 adds regression tests for a host outage lasting across failed retries, unavailable discovery during reconnect, repeated suspend/resume, occupied ports during recovery, and a server that upgrades WebSocket but never completes player admission. All 14 tests pass, static analysis is clean, and the signed debug APK was built as version 0.4.0. Physical Android background/resume verification remains required; desktop tests do not reproduce every device power-management policy.
+
 ## Contributing
 
 This repository is maintained by **Khaled Abdulrahman**. Changes to the default branch are made only by the repository owner's GitHub account. See [CONTRIBUTING.md](CONTRIBUTING.md).

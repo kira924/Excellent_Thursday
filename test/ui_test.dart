@@ -171,14 +171,13 @@ void main() {
     expect(player.connected, isTrue);
     joined = true;
     final originalPlayerId = player.id;
-    tester.binding.handleAppLifecycleStateChanged(
-      AppLifecycleState.paused,
-    );
-    tester.binding.handleAppLifecycleStateChanged(
-      AppLifecycleState.resumed,
-    );
-    await tester.runAsync(() => waitUntil(() => disconnectedAfterResume));
-    await tester.runAsync(() => waitUntil(() => player.connected));
+    await tester.runAsync(() async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await waitUntil(() => disconnectedAfterResume);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await waitUntil(() => player.connected);
+    });
+    await tester.pumpAndSettle();
     expect(player.id, originalPlayerId);
 
     await tester.tap(find.text('افتح الجرس للجميع'));

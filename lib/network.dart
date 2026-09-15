@@ -12,6 +12,16 @@ String _token() {
   ).join();
 }
 
+Future<void> _closeSocket(WebSocket socket) async {
+  try {
+    await socket
+        .close(WebSocketStatus.goingAway)
+        .timeout(const Duration(seconds: 1));
+  } catch (_) {
+    // Best effort: stale sockets cannot block session recovery.
+  }
+}
+
 class HostServer {
   HostServer(this.game, {required this.onChanged, this.discoveryPort = 45874});
   final Game game;
@@ -23,31 +33,98 @@ class HostServer {
   final Map<String, WebSocket> _clients = {};
   final Set<WebSocket> _sockets = {};
   final Map<String, String> _credentials = {};
-  List<String> addresses = [];
   int get port => _server?.port ?? 0;
   int get activeDiscoveryPort => _discovery?.port ?? discoveryPort;
   bool _closed = false;
+  bool _suspended = false;
+  int _generation = 0;
+  int _listenPort = 45873;
+  int? _listenDiscoveryPort;
+  Future<void> _transportQueue = Future.value();
+  bool get isListening => !_closed && !_suspended && _server != null;
 
-  Future<void> start({int port = 45873}) async {
-    _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
-    addresses = (await NetworkInterface.list(type: InternetAddressType.IPv4))
-        .expand((i) => i.addresses)
-        .where((a) => !a.isLoopback)
-        .map((a) => '${a.address}:${_server!.port}')
-        .toList();
+  Future<void> _serialize(Future<void> Function() action) {
+    final operation = _transportQueue.then((_) => action());
+    _transportQueue = operation.catchError((Object _) {});
+    return operation;
+  }
+
+  Future<void> start({int port = 45873}) {
+    _listenPort = port;
+    return _serialize(_bind);
+  }
+
+  Future<void> _bind() async {
+    if (_closed || _suspended || _server != null) return;
+    final generation = _generation;
+    final server = await HttpServer.bind(InternetAddress.anyIPv4, _listenPort);
+    RawDatagramSocket? discovery;
     try {
-      _discovery = await RawDatagramSocket.bind(
+      discovery = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
-        discoveryPort,
+        _listenDiscoveryPort ?? discoveryPort,
         reuseAddress: false,
       );
-      _discovery!.listen(_discoveryEvent, onError: (_) {});
+      if (_closed || _suspended || generation != _generation) {
+        discovery.close();
+        await server.close(force: true);
+        return;
+      }
+      _server = server;
+      _discovery = discovery;
+      _listenPort = server.port;
+      _listenDiscoveryPort = discovery.port;
+      discovery.listen(_discoveryEvent, onError: (_) {});
+      server.listen(
+        (request) => _request(request, generation),
+        onError: (_) {},
+      );
     } catch (_) {
-      await _server?.close(force: true);
-      _server = null;
+      discovery?.close();
+      await server.close(force: true);
       rethrow;
     }
-    _server!.listen(_request, onError: (_) {});
+  }
+
+  Future<void> suspend() {
+    if (_closed || _suspended) return _transportQueue;
+    _suspended = true;
+    _generation++;
+    if (game.armed) game.closeBell();
+    return _serialize(_stopTransport);
+  }
+
+  Future<void> resume() {
+    if (_closed) return _transportQueue;
+    _suspended = false;
+    _generation++;
+    return _serialize(() async {
+      await _stopTransport();
+      await _bind();
+    });
+  }
+
+  Future<void> _stopTransport() async {
+    // Invalidate every request handler created by the listener being stopped.
+    // This also covers repeated resume events queued back-to-back.
+    _generation++;
+    final server = _server;
+    _server = null;
+    _discovery?.close();
+    _discovery = null;
+    final sockets = _sockets.toList();
+    _sockets.clear();
+    _clients.clear();
+    for (final player in game.players.values) {
+      player.online = false;
+    }
+    if (!_closed) onChanged();
+    // A suspended peer may never complete the WebSocket close handshake.
+    // It must not prevent rebinding the listening ports.
+    await Future.wait([
+      if (server != null) server.close(force: true).then<void>((_) {}),
+      ...sockets.map(_closeSocket),
+    ]);
   }
 
   void _discoveryEvent(RawSocketEvent event) {
@@ -79,8 +156,10 @@ class HostServer {
     }
   }
 
-  Future<void> _request(HttpRequest request) async {
+  Future<void> _request(HttpRequest request, int generation) async {
     if (_closed ||
+        _suspended ||
+        generation != _generation ||
         request.uri.path != '/play' ||
         !WebSocketTransformer.isUpgradeRequest(request) ||
         _sockets.length >= 64) {
@@ -90,8 +169,8 @@ class HostServer {
     }
     try {
       final socket = await WebSocketTransformer.upgrade(request);
-      if (_closed) {
-        await socket.close();
+      if (_closed || _suspended || generation != _generation) {
+        await _closeSocket(socket);
         return;
       }
       _sockets.add(socket);
@@ -102,6 +181,7 @@ class HostServer {
       });
       socket.listen(
         (raw) {
+          if (_closed || _suspended || generation != _generation) return;
           try {
             if (raw is! String || raw.length > 4096) {
               unawaited(socket.close());
@@ -204,28 +284,10 @@ class HostServer {
     onChanged();
   }
 
-  void refreshConnections() {
-    if (_closed) return;
-    final staleSockets = _sockets.toList();
-    _clients.clear();
-    for (final player in game.players.values) {
-      player.online = false;
-    }
-    for (final socket in staleSockets) {
-      if (socket.readyState == WebSocket.open) {
-        unawaited(socket.close(WebSocketStatus.goingAway, 'Host resumed'));
-      }
-    }
-    publish();
-  }
-
-  Future<void> close() async {
+  Future<void> close() {
     _closed = true;
-    _discovery?.close();
-    await _server?.close(force: true);
-    await Future.wait(_sockets.toList().map((s) => s.close()));
-    _clients.clear();
-    _sockets.clear();
+    _generation++;
+    return _serialize(_stopTransport);
   }
 }
 
@@ -248,6 +310,8 @@ class PlayerClient {
   WebSocket? _socket;
   RawDatagramSocket? _finder;
   Timer? _retry;
+  Timer? _joinDeadline;
+  Completer<Uri>? _discoveryResult;
   Timer? _discoveryTimer;
   String? resolvedAddress;
   String? token;
@@ -275,7 +339,9 @@ class PlayerClient {
   }
 
   Future<void> connect() async {
-    if (_closed || _connecting || rejected || connected) return;
+    if (_closed || _connecting || rejected || connected || _socket != null) {
+      return;
+    }
     _connecting = true;
     WebSocket? socket;
     try {
@@ -293,7 +359,6 @@ class PlayerClient {
         try {
           socket = await _openSocket(cachedTarget);
         } catch (_) {
-          resolvedAddress = null;
           status = 'بندور على الهوست في الشبكة…';
           onChanged();
           final discoveredTarget = await _discoverHost();
@@ -310,6 +375,9 @@ class PlayerClient {
         return;
       }
       _socket = socket;
+      _joinDeadline = Timer(const Duration(seconds: 8), () {
+        if (!connected) _disconnected(socket);
+      });
       socket.pingInterval = const Duration(seconds: 15);
       socket.add(
         jsonEncode({
@@ -330,11 +398,13 @@ class PlayerClient {
               id = message['id'] as String;
             } else if (message['type'] == 'state') {
               state = Map<String, dynamic>.from(message['state'] as Map);
+              _joinDeadline?.cancel();
               connected = true;
               status = 'متصل بالهوست';
               if (state!['window'] != sentWindow) sentWindow = null;
             } else if (message['type'] == 'error') {
               status = message['message'] as String;
+              _joinDeadline?.cancel();
               rejected = true;
               connected = false;
             }
@@ -348,6 +418,10 @@ class PlayerClient {
       );
     } catch (_) {
       if (!_closed) {
+        _joinDeadline?.cancel();
+        if (identical(_socket, socket)) _socket = null;
+        if (socket != null) unawaited(_closeSocket(socket));
+        connected = false;
         status = 'مش لاقيين الجلسة. راجع الكود والشبكة، وبنحاول تاني…';
         onChanged();
         _scheduleRetry();
@@ -360,10 +434,23 @@ class PlayerClient {
   Future<WebSocket> _openSocket(Uri target) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
     try {
-      return await WebSocket.connect(
+      final pending = WebSocket.connect(
         target.toString(),
         customClient: client,
-      ).timeout(const Duration(seconds: 5));
+      );
+      var expired = false;
+      unawaited(
+        pending.then((socket) {
+          if (expired || _closed) unawaited(_closeSocket(socket));
+        }, onError: (Object _) {}),
+      );
+      return await pending.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          expired = true;
+          throw TimeoutException('Host connection timed out');
+        },
+      );
     } catch (_) {
       client.close(force: true);
       rethrow;
@@ -376,9 +463,14 @@ class PlayerClient {
       0,
       reuseAddress: false,
     );
+    if (_closed) {
+      finder.close();
+      throw StateError('Player closed');
+    }
     _finder = finder;
     finder.broadcastEnabled = true;
     final completer = Completer<Uri>();
+    _discoveryResult = completer;
     late final StreamSubscription<RawSocketEvent> subscription;
     subscription = finder.listen((event) {
       if (event != RawSocketEvent.read || completer.isCompleted) return;
@@ -439,13 +531,16 @@ class PlayerClient {
       await subscription.cancel();
       finder.close();
       if (identical(_finder, finder)) _finder = null;
+      if (identical(_discoveryResult, completer)) _discoveryResult = null;
     }
   }
 
   void _disconnected(WebSocket? socket) {
     if (_closed || !identical(socket, _socket)) return;
+    _joinDeadline?.cancel();
     connected = false;
     _socket = null;
+    if (socket != null) unawaited(_closeSocket(socket));
     sentWindow = null;
     if (!rejected) {
       status = 'الاتصال فصل… بنحاول نرجع لنفس الفريق';
@@ -457,7 +552,13 @@ class PlayerClient {
   void _scheduleRetry() {
     _retry?.cancel();
     if (!_closed && !rejected) {
-      _retry = Timer(const Duration(milliseconds: 750), connect);
+      _retry = Timer(const Duration(milliseconds: 750), () {
+        if (_connecting) {
+          _scheduleRetry();
+        } else {
+          unawaited(connect());
+        }
+      });
     }
   }
 
@@ -483,9 +584,16 @@ class PlayerClient {
   Future<void> close() async {
     _closed = true;
     _retry?.cancel();
+    _joinDeadline?.cancel();
     _discoveryTimer?.cancel();
     _finder?.close();
-    await _socket?.close();
+    final discoveryResult = _discoveryResult;
+    if (discoveryResult != null && !discoveryResult.isCompleted) {
+      discoveryResult.completeError(StateError('Player closed'));
+    }
+    final socket = _socket;
+    _socket = null;
+    if (socket != null) await _closeSocket(socket);
     connected = false;
   }
 }
